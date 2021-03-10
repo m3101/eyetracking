@@ -77,8 +77,7 @@ def real_xyz_from_screen_xy(current_vector2d_screen:np.ndarray,screen_centre:np.
     ret[2] = reference_z*scaling_factor_2d
     #X and Y coordinates
     vector2d_centre = (current_vector2d_screen[0]+current_vector2d_screen[1])/2
-    distance_2d_from_centre = vector2d_centre - screen_centre
-    distance_2d_from_centre[1] = -distance_2d_from_centre[1]
+    distance_2d_from_centre = screen_centre-vector2d_centre
     #Using the same scaling factor, we can estimate what would be the size, in pixels, of our
     #position in that XY plane at the reference distance. We just need to use the scaling factor
     #in reverse (dividing by it instead of multiplying)
@@ -86,6 +85,48 @@ def real_xyz_from_screen_xy(current_vector2d_screen:np.ndarray,screen_centre:np.
     #That distance is proportional to the real XY position through real_length/screen_length_at_reference_z
     ret[:2] = real_length * projected_distance_at_reference/screen_length_at_reference_z
     return ret
+def real_xyz_from_screen_xy_mtx(current_vector2d_screen:np.ndarray,screen_centre:np.ndarray,
+                                real_length:float,inverse_intrinsic_matrix:np.ndarray)->np.ndarray:
+    """
+    Uses a calibrated camera matrix to calculate the real-life coordinates
+    for the object with the camera as (0,0,0), Y being "up" on the camera image,
+    X being "right" and Z being "into"
+    * current_vector2d_screen = [[x0,y0],[x1,y1]]
+    * screen_centre = [x,y]
+    """
+    #If both trackers are at the same point, we can't determine the position
+    if np.all(current_vector2d_screen[0]-current_vector2d_screen[1]==np.array([0,0])):
+        return np.array([0,0,0])
+    #We'll first transform the screen coordinates into 
+    #direction vectors coming from the camera origin
+    a  = np.dot(inverse_intrinsic_matrix,np.insert(current_vector2d_screen[0],2,1))
+    na = np.linalg.norm(a)
+    a  = a/na
+    b  = np.dot(inverse_intrinsic_matrix,np.insert(current_vector2d_screen[1],2,1))
+    nb = np.linalg.norm(b)
+    b  = b/nb
+    #cos(aOb)=ab/|a||b|
+    #|a|=|b|=1, so cos(aOb)=ab
+    cos = np.dot(a,b)
+    theta = math.acos(cos)
+    #tan(alpha)= opposite side/adjacent side
+    #opposite side = real length/2, adjacent side = z distance, alpha=theta/2
+    #z distance = real length/2*tan(theta/2)
+    z=0
+    z = real_length/(2*math.tan(theta/2))
+
+    #Now for calculating the XY position on the plane,
+    #we calculate the ray going to the centre of the line segment
+    #we're tracing
+    centre = (current_vector2d_screen[0]+current_vector2d_screen[1])/2
+    d = np.dot(inverse_intrinsic_matrix,np.insert(centre,2,1))
+    #We need to scale this direction vector so its z component is at our depth
+    scaling = z/d[2]
+    d = d*scaling
+    #The Y direction is flipped
+    d[:2]=-d[:2]
+    #This is our exact position
+    return d
 def project_image_at_xyz(img:np.ndarray,xyz:np.ndarray,target_window_shape:tuple,
                             reference_z:float,fixedscale:float,fixedtranslation:tuple,
                             screen_pixel_density:float):

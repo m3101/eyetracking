@@ -3,3 +3,5 @@ __pycache__
 socketfile
 #Blender backup files
 *.blend?
+#Numpy matrices
+*.np

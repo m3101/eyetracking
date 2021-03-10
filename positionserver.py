@@ -27,6 +27,10 @@ eyeseparation=6#cm
 reference_distance=30#cm
 separation_at_ref=116#pixels
 
+#Whether the estimation should be made via camera matrices or
+#the default proportion method
+usematrix = True
+
 import cv2
 import numpy as np
 import math
@@ -36,6 +40,16 @@ import io
 import _thread
 import socket
 import os
+
+#If we're using the intrinsic matrix, we have to load it
+if usematrix:
+    try:
+        with open("inverseIntrinsicMatrix.np",'rb') as f:
+            iimatrix = np.load(f)
+    except:
+        print("Calibration matrix not found.")
+        print("Please change the method flag on the script or calibrate the camera with calibrate.py")
+        exit(1)
 
 #Pupil positions (and kernels/images)
 corners = np.array([[0,0],[0,0]])
@@ -118,7 +132,7 @@ while(True):
     #Caputre and process the frame
     ret, frame = cap.read()
     frame = cv2.cvtColor(frame, cv2.IMREAD_COLOR)
-    frame = cv2.flip(frame,1)
+    #frame = cv2.flip(frame,1)
     #Grayscale and median blur for lessening noise
     frameg = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     frameg = cv2.medianBlur(frameg,7)
@@ -131,7 +145,11 @@ while(True):
             #cv2.imshow(str(i),cimgs[i])
     
     #Calculate the 3d position
-    pos_3d = utils.smooth(pos_3d,utils.real_xyz_from_screen_xy(corners,np.array(frame.shape[:2][::-1])/2,
+    if usematrix:
+        pos_3d = utils.smooth(pos_3d,utils.real_xyz_from_screen_xy_mtx(corners,np.array(frame.shape[:2][::-1])/2,
+                                        eyeseparation,iimatrix),smoothingf)
+    else:
+        pos_3d = utils.smooth(pos_3d,utils.real_xyz_from_screen_xy(corners,np.array(frame.shape[:2][::-1])/2,
                                         separation_at_ref,reference_distance,
                                         eyeseparation),smoothingf)
     
@@ -140,8 +158,10 @@ while(True):
     if key == ord('q'):
         running=False
         break
-    if key == ord('r'):
+    elif key == ord('r'):
         corners = np.array([(0,0),(0,0),(0,0),(0,0)])
         cI=0
+    elif key == ord('m'):
+        usematrix = not usematrix
 cv2.destroyAllWindows()
 cap.release()
