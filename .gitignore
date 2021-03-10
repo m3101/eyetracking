@@ -1,0 +1,5 @@
+__pycache__
+#UNIX socket file for the blender-integrated test
+socketfile
+#Blender backup files
+*.blend?
