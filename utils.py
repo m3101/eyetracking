@@ -42,7 +42,7 @@ def locmin(img:np.array,x:int,y:int,w:int,pimg:np.array,w2:int)->tuple:
     #If we're on an edge
     if x<w or img.shape[1]-x<w or y<w or img.shape[0]-y<w :
         #Halt or else we'll end up crashing the script
-        return (np.array([0,0,0]),pimg,0)
+        return (np.array([0,0]),pimg,0)
     #If there's no image to track
     if isinstance(pimg,type(None)):
         #Return one centered on (x,y)
