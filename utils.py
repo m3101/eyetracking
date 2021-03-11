@@ -1,5 +1,5 @@
 """
-    Computer vision utilities
+    Computer vision and statistical utilities
     Copyright (C) 2021 Amélia O. F. da S.
     <a.mellifluous.one@gmail.com>
 
@@ -35,28 +35,71 @@ def locmin(img:np.array,x:int,y:int,w:int,pimg:np.array,w2:int)->tuple:
     """
     Effectively tracks high-contrast patterns.
     In practive, finds the area within the wXw area around (x,y)
-    with the smallest difference in relation to pimg
-    Returns ((new x, new y), new pimg)
+    with the biggest cross-correlation to the original image
+    Returns ((new x, new y), new pimg, min_difference)
     Can take None as pimg (for, e.g. resetting or the first iteration).
     """
     #If we're on an edge
     if x<w or img.shape[1]-x<w or y<w or img.shape[0]-y<w :
         #Halt or else we'll end up crashing the script
-        return (np.array([0,0]),pimg)
+        return (np.array([0,0,0]),pimg,0)
     #If there's no image to track
     if isinstance(pimg,type(None)):
         #Return one centered on (x,y)
-        return (np.array([x,y]),img[y-w2:y+w2,x-w2:x+w2])
+        return (np.array([x,y]),img[y-w2:y+w2,x-w2:x+w2],0)
     #Separate the area around the point
     area = img[y-w:y+w,x-w:x+w]
-    area = cv2.equalizeHist(area)
-    #Calculate the differences with the nearby areas
+    area = cv2.equalizeHist(area).astype(np.float32)
+    #Calculate the modulus of our kernel area
+    km = pimg.sum()
+    #Calculate the vector moduli of each area
+    moduli = cv2.filter2D(area,-1,np.ones(area.shape))
+    #Make the vector product
     #filter2D reflects the kernel through its centre, so we revert pimg on both axes
-    scores = np.abs(cv2.filter2D(area.astype(np.float32),-1,-pimg[::-1,::-1].astype(np.float32),borderType=cv2.BORDER_ISOLATED))[w2:-w2+1,w2:-w2+1]
+    scores = np.abs(cv2.filter2D(area,-1,pimg[::-1,::-1].astype(np.float32),borderType=cv2.BORDER_ISOLATED))
+    #Divide the product by the product of the moduli at each point
+    scores = (scores/km)/moduli
+    #Limit it to the area where our data is actually meaningful
+    scores = scores[w2:-w2,w2:-w2]
     #Find the minimum
-    m = np.unravel_index(np.argmin(scores),scores.shape)
-    m = (m[0]+w2,m[1]+w2)
-    return (np.array([x+(int(m[1]-w)),y+(int(m[0]-w))]),smooth(pimg,area[m[1]-w2:m[1]+w2,m[0]-w2:m[0]+w2],0.8))
+    om = np.unravel_index(np.argmin(scores),scores.shape)
+    m = (om[0]+w2,om[1]+w2)
+    return (np.array([x+(int(m[1]-w)),y+(int(m[0]-w))]),smooth(pimg,area[m[1]-w2:m[1]+w2,m[0]-w2:m[0]+w2],0.9),scores[om])
+def point_is_outlier(point:np.array,lastn:np.array,var_threshold:float,length:int=-1,output_current_ratio:bool=False)->tuple:
+    """
+    Determines whether a data point is an outlier through variance and adds it to fixed-size set.
+    For the first point, the function expects lastn=None and length=desired set size.
+    For the others, it expects lastn to be the set returned by the last iteration
+    If (point-mean)**2/(len(set)*variance(set))-1>var_threshold, returns (True,newset)
+    otherwise, returns (False,newset)
+    """
+    if lastn is None:
+        if output_current_ratio:
+            return (False,np.array([point]),0)
+        return (False,np.array([point]))
+    else:
+        if(len(lastn)<length):
+            lastn=np.insert(lastn,0,np.zeros(point.shape),0)
+            if output_current_ratio:
+                return (False,lastn,0)
+            else:
+                return (False,lastn)
+        #Shift the current values left
+        lastn[0:-1] = lastn[1:]
+        #Put our last point in the rightmost position
+        lastn[-1] = point
+        #Calculate the variance
+        var = lastn.var()
+        if var == 0:
+            #To avoid NaNs
+            var = 1e-10
+        #Mean
+        mean = lastn.mean(0)
+        ratio = ((point-mean)**2).sum()/(len(lastn)*var)
+        if output_current_ratio:
+            return (ratio>var_threshold,lastn,ratio)
+        else:
+            return (ratio>var_threshold,lastn)
 def real_xyz_from_screen_xy(current_vector2d_screen:np.ndarray,screen_centre:np.ndarray,
                             screen_length_at_reference_z:float,reference_z:float,
                             real_length:float)->np.ndarray:
@@ -64,8 +107,8 @@ def real_xyz_from_screen_xy(current_vector2d_screen:np.ndarray,screen_centre:np.
     Uses triangle similarities to calculate object coordinates with the camera as (0,0,0),
     Y being "up" on the camera image, X being "right" and Z being "into"
     from reference measurements at a known distance
-    * current_vector2d_screen = [[x0,y0],[x1,y1]]
-    * screen_centre = [x,y]
+        current_vector2d_screen = [[x0,y0],[x1,y1]]
+        screen_centre = [x,y]
     """
     ret = np.zeros(3)
     #Z coordinate
@@ -91,8 +134,8 @@ def real_xyz_from_screen_xy_mtx(current_vector2d_screen:np.ndarray,screen_centre
     Uses a calibrated camera matrix to calculate the real-life coordinates
     for the object with the camera as (0,0,0), Y being "up" on the camera image,
     X being "right" and Z being "into"
-    * current_vector2d_screen = [[x0,y0],[x1,y1]]
-    * screen_centre = [x,y]
+        current_vector2d_screen = [[x0,y0],[x1,y1]]
+        screen_centre = [x,y]
     """
     #If both trackers are at the same point, we can't determine the position
     if np.all(current_vector2d_screen[0]-current_vector2d_screen[1]==np.array([0,0])):
@@ -117,7 +160,7 @@ def real_xyz_from_screen_xy_mtx(current_vector2d_screen:np.ndarray,screen_centre
 
     #Now for calculating the XY position on the plane,
     #we calculate the ray going to the centre of the line segment
-    #we're tracing
+    #we're tracking
     centre = (current_vector2d_screen[0]+current_vector2d_screen[1])/2
     d = np.dot(inverse_intrinsic_matrix,np.insert(centre,2,1))
     #We need to scale this direction vector so its z component is at our depth
@@ -130,6 +173,9 @@ def real_xyz_from_screen_xy_mtx(current_vector2d_screen:np.ndarray,screen_centre
 def project_image_at_xyz(img:np.ndarray,xyz:np.ndarray,target_window_shape:tuple,
                             reference_z:float,fixedscale:float,fixedtranslation:tuple,
                             screen_pixel_density:float):
+    """
+    Deforms an image so it looks static for a viewer at the real position XYZ
+    """
     #First triangle similarity: XY planes for each z
     plane_scaling = xyz[2]/reference_z
     #Translation

@@ -18,29 +18,45 @@
 """
 
 #Parameters for projection
-# Measure your pupil separation in real units
-# separation_at_ref can be obtained using the tracker
-# Stay at a real reference_distance, track your eyes
-# and register the pixel separation (see the top left corner of the
-# tracker screen)
+## Measure your pupil separation in real units
+## separation_at_ref can be obtained using the tracker
+## Stay at a real reference_distance, track your eyes
+## and register the pixel separation (see the top left corner of the
+## tracker screen)
 eyeseparation=6#cm
 reference_distance=40#cm
 separation_at_ref=100#pixels
-#For projecting
-#Measure the projecting window width
-# in pixels divided by its real width
-# in real units
+##For projecting
+##Measure the projecting window width
+## in pixels divided by its real width
+## in real units
 screen_pixel_density = 640/16 ##pixels/cm
+
+#Parameters for detecting tracking loss
+## Series length
+eyeSeriesLength = 20
+## Sensitivity for tracking loss (how many times the variance of the last
+## point has to be bigger than the set variance for us to consider it an outlier)
+eyeSeriesSensitivity = 0.40
 
 #Whether the estimation should be made via camera matrices or
 #the default proportion method
 usematrix = True
+
+#Smoothing factors
+smoothingf = 0.6
+trackingsmoothfactor = 0.1
+
+#Tracking radii
+trackradius = 14
+kernelsize = 3
 
 import cv2
 import numpy as np
 import math
 import utils
 import pdb
+import faceCascade
 
 #If we're using the intrinsic matrix, we have to load it
 if usematrix:
@@ -56,6 +72,12 @@ if usematrix:
 corners = np.array([[0,0],[0,0]])
 cimgs = [None,None]
 
+#Smoothed error
+trackerror = np.zeros(1)
+
+#A series of the last N eye positions so we can detect when it loses track
+eyeSeries = None
+
 #Windows
 name = "Tracker"
 cv2.namedWindow(name,cv2.WINDOW_NORMAL)
@@ -66,32 +88,10 @@ cv2.namedWindow(name2,cv2.WINDOW_NORMAL)
 name3 = "3d static image"
 cv2.namedWindow(name3,cv2.WINDOW_AUTOSIZE)
 
-#cI defines what corner will be updated with this click
-cI=0
-def trackclick(event, x, y, flags, param):
-    global corners,cI
-    if event == cv2.EVENT_LBUTTONDOWN:
-        #Defines the current corner's position
-        corners[cI]=(x,y)
-        cimgs[cI]=None
-        print(f"Corner {cI} is now at {corners[cI]}")
-        cI+=1
-        cI%=2
-
-cv2.setMouseCallback(name, trackclick)
-
 cap = cv2.VideoCapture(0)
 
 #Our images to project
 llyn = cv2.imread("llyn.jpg")
-
-#Smoothing factors
-smoothingf = 0.8
-trackingsmoothfactor = 0.4
-
-#Tracking radii
-trackradius = 10
-kernelsize = 5
 
 #Final coordinates
 pos_3d = np.zeros(3)
@@ -105,14 +105,42 @@ while(True):
     #Grayscale and median blur for lessening noise
     frameg = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     frameg = cv2.medianBlur(frameg,7)
+
+    #If we don't have a tracking series,
+    #find a face and track the eyes
+    if eyeSeries is None:
+        eyes = faceCascade.cascade_face_eyes(frameg)
+        if eyes is None:
+            #If we have no series and found no eyes, we can't proceed
+            cv2.imshow(name,frame)
+            key = cv2.waitKey(1)
+            if key == ord('q'):
+                break
+            continue
+        cv2.rectangle(frame,(eyes[0][0],eyes[0][1]),(eyes[0][0]+eyes[0][2],eyes[0][1]+eyes[0][3]),
+                      (0,0,255),3)
+        #Centralise the eye XY coordinates
+        eyes = eyes[1:,:2]+eyes[1:,2:]/2
+        #Those are our tracks
+        corners = eyes.astype(int)
+
     #Track and draw the tracking corners
     for i in range(2):
-        ct,cimgs[i] = utils.locmin(frameg,corners[i][0],corners[i][1],trackradius,cimgs[i],kernelsize)
+        ct,cimgs[i],e = utils.locmin(frameg,corners[i][0],corners[i][1],trackradius,cimgs[i],kernelsize)
+        trackerror = utils.smooth(trackerror,np.array([e]),0.5)
         corners[i] = utils.smooth(corners[i],ct,trackingsmoothfactor)
         cv2.circle(frame,tuple(corners[i]),4,(0,0,255),5)
         #if type(cimgs[i])!=type(None):
             #cv2.imshow(str(i),cimgs[i])
-    
+
+    #Check if our current track is an outlier (and move our series forwards in time)
+    outlier,eyeSeries,ratio = utils.point_is_outlier(trackerror,eyeSeries,eyeSeriesSensitivity,eyeSeriesLength,True)    
+    #You can use this line to adjust the outlier sensitivity
+    #print(ratio)
+    if outlier or np.all(corners[0]==corners[1]):
+        #Reset our series so we look for a new track
+        eyeSeries = None
+
     #Calculate the 3d position
     if usematrix:
         pos_3d = utils.smooth(pos_3d,utils.real_xyz_from_screen_xy_mtx(corners,np.array(frame.shape[:2][::-1])/2,
@@ -140,11 +168,9 @@ while(True):
     cv2.imshow(name3,pic)
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
-        running=False
         break
     elif key == ord('r'):
-        corners = np.array([(0,0),(0,0),(0,0),(0,0)])
-        cI=0
+        eyeSeries=None
     elif key == ord('m'):
         usematrix = not usematrix
 cv2.destroyAllWindows()

@@ -5,3 +5,5 @@ socketfile
 *.blend?
 #Numpy matrices
 *.np
+#Haar cascades
+data
